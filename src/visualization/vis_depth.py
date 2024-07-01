@@ -3,7 +3,7 @@ import torch.utils.data
 import numpy as np
 import torchvision.utils as vutils
 import cv2
-from matplotlib.cm import get_cmap
+from matplotlib.pyplot import get_cmap
 import matplotlib as mpl
 import matplotlib.cm as cm
 

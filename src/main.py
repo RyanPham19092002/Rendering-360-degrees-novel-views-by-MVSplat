@@ -85,6 +85,8 @@ def train(cfg_dict: DictConfig):
         logger = LocalLogger()
 
     # Set up checkpointing.
+    print("Output------------", output_dir / "checkpoints")
+    os.makedirs(output_dir / "checkpoints", exist_ok=True)
     callbacks.append(
         ModelCheckpoint(
             output_dir / "checkpoints",

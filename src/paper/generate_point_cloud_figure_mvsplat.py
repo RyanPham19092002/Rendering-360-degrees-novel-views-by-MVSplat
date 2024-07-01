@@ -52,7 +52,7 @@ with install_import_hook(
 #     if scene_name in test_cfgs and scene_views is not None:
 #         SCENES.append((scene_name, *scene_views["context"], 10.0, [100]))
 
-with open("assets/evaluation_index_re10k.json") as f:
+with open("assets/evaluation_index_VinAI_6_input_full_view_nctx2_nf_5000.json") as f:
     scene_cfgs = json.load(f)
 
 # scene_names = ("2e2ad99d45033d6a",)
@@ -93,7 +93,13 @@ SCENES = (
     # ("464e3851f923f8d0", 0, 65, 8.0, [110], 1.4, 19),
     # ("4cfefe4588b687a9", 35, 82, 6.0, [105], 1.4, 19),
     # ("2fdfa70413053b84", 18, 106, 6.0, [110], 1.4, 19),
-    ("5ca0d8f0b24ae0aa", 7, 113, 6.0, [110], 1.4, 19),
+    # ("5ca0d8f0b24ae0aa", 7, 113, 6.0, [110], 1.4, 19),
+    ("view_test", 0, 1, 5000.0, [110], 1.4, 19),
+    # ("view_test_01", 1, 2, 5000.0, [110], 1.4, 19),
+    # ("view_test_02", 2, 3, 5000.0, [110], 1.4, 19),
+    # ("view_test_03", 3, 4, 5000.0, [110], 1.4, 19),
+    # ("view_test_04", 4, 5, 5000.0, [110], 1.4, 19),
+    # ("view_test_05", 5, 0, 5000.0, [110], 1.4, 19),
 )
 
 
@@ -183,20 +189,10 @@ def generate_point_cloud_figure(cfg_dict):
             element = rearrange(
                 element, "() (v h w spp) ... -> h w spp v ...", v=2, h=h, w=w
             )
-            return element[mask][None]
+            # return element[mask][None]
+            return element[None]
 
         for angle in angles:
-            # Define the pose we render from.
-            # pose = torch.eye(4, dtype=torch.float32, device=device)
-            # rotation = R.from_euler("xyz", [10, -15, 0], True).as_matrix()
-            # pose[:3, :3] = torch.tensor(rotation, dtype=torch.float32, device=device)
-            # translation = torch.eye(4, dtype=torch.float32, device=device)
-            # # visual balance, 0.5x pyramid/frustum volume
-            # translation[2, 3] = far * (0.5 ** (1 / 3))
-            # # translation[2, 3] = far * (0.5 ** (1 / 3))  # * 3.0
-            # translation[1, 3] = -0.2
-            # translation[0, 3] = -0.5
-            # pose = translation @ pose
 
             pose = torch.eye(4, dtype=torch.float32, device=device)
             rotation = R.from_euler("xyz", [-15, angle - 90, 0], True).as_matrix()
@@ -271,31 +267,6 @@ def generate_point_cloud_figure(cfg_dict):
             camera_origins = example["context"]["extrinsics"][0, :, :3, 3]
             # stack the rendered pose for debugging
 
-            # frustum_corners = unproject_frustum_corners(
-            #     torch.cat(
-            #         (
-            #             example["context"]["extrinsics"][0],
-            #             example["context"]["extrinsics"][0, :1] @ pose,
-            #         ),
-            #         dim=0,
-            #     ),
-            #     torch.cat(
-            #         (
-            #             example["context"]["intrinsics"][0],
-            #             example["context"]["intrinsics"][0, :1],
-            #         ),
-            #         dim=0,
-            #     ),
-            #     torch.ones((2 + 1,), dtype=torch.float32, device=device) * far / 16,
-            # )
-            # camera_origins = torch.cat(
-            #     (
-            #         example["context"]["extrinsics"][0, :, :3, 3],
-            #         (example["context"]["extrinsics"][0, :1] @ pose)[:, :3, 3],
-            #     ),
-            #     dim=0,
-            # )
-
             # Generate the 3D lines that have to be computed.
             lines = []
             for corners, origin in zip(frustum_corners, camera_origins):
@@ -323,14 +294,6 @@ def generate_point_cloud_figure(cfg_dict):
                     x_range=(0, 1),
                     y_range=(0, 1),
                 )
-
-                # if line_idx // 8 == 0:
-                #     lcolor = [1.0, 0, 0]
-                # elif line_idx // 8 == 1:
-                #     lcolor = [0, 1.0, 0]
-                # else:
-                #     lcolor = [0, 0, 1.0]
-
                 # Create the color.
                 lc = torch.tensor(
                     LINE_COLOR,
@@ -385,28 +348,14 @@ def generate_point_cloud_figure(cfg_dict):
             save_image(image, f"{base}_angle_{angle:0>3}.png")
 
             # also save the premultiplied color for debugging
-            # save_image(layers[0][0], f"{base}_angle_{angle:0>3}_raw.png")
 
             # Render depth.
             *_, h, w = example["context"]["image"].shape
-            # rendered = decoder.forward(
-            #     gaussians,
-            #     example["context"]["extrinsics"],
-            #     example["context"]["intrinsics"],
-            #     example["context"]["near"],
-            #     example["context"]["far"],
-            #     (h, w),
-            #     "depth",
-            # )
+
 
             # convert the rotations from camera space to world space as required
             cam_rotations = trim(visualization_dump["rotations"])[0]
-            # pts_perview = int(cam_rotations.shape[0] / 2.0)
-            # c2w_mat = repeat(
-            #     example["context"]["extrinsics"][0, :, :3, :3],
-            #     "v ... -> (v pts) ...",
-            #     pts=pts_perview,
-            # )
+ 
             c2w_mat = repeat(
                 example["context"]["extrinsics"][0, :, :3, :3],
                 "v a b -> h w spp v a b",
@@ -441,34 +390,13 @@ def generate_point_cloud_figure(cfg_dict):
             )
             for v_idx in range(depth_vis.shape[1]):
                 vis_depth = viz_depth_tensor(
-                    1.0 / depth_vis[0, v_idx], return_numpy=True
+                    depth_vis[0, v_idx], return_numpy=True
                 )  # inverse depth
                 # save_path = path / scene / f"color/input{v_idx}_depth.png"
                 # os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 Image.fromarray(vis_depth).save(f"{base}_depth_{v_idx}.png")
 
             # save context views
-            # save_image(example["context"]["image"][0, 0], f"{base}_input_0.png")
-            # save_image(example["context"]["image"][0, 1], f"{base}_input_1.png")
-
-            # result = rendered.depth.cpu().detach()
-            # print(result.shape)
-            # assert False
-            # for v_idx in range(result.shape[1]):
-            # vis_depth = viz_depth_tensor(
-            # 1.0 / result[0, v_idx], return_numpy=True
-            # )  # inverse depth
-            # save_path = path / scene / f"color/input{v_idx}_depth.png"
-            # os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            # Image.fromarray(vis_depth).save(f"{base}_depth_{v_idx}_gs.png")
-
-            # depth_near = result[result > 0].quantile(0.01).log()
-            # depth_far = result.quantile(0.99).log()
-            # result = result.log()
-            # result = 1 - (result - depth_near) / (depth_far - depth_near)
-            # result = apply_color_map_to_image(result, "turbo")
-            # save_image(result[0, 0], f"{base}_depth_0_gs.png")
-            # save_image(result[0, 1], f"{base}_depth_1_gs.png")
             a = 1
         a = 1
     a = 1

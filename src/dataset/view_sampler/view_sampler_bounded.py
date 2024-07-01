@@ -95,13 +95,14 @@ class ViewSamplerBounded(ViewSampler[ViewSamplerBoundedCfg]):
             )
         else:
             # When training or validating (visualizing), pick at random.
-            index_target = torch.randint(
-                index_context_left + self.cfg.min_distance_to_context_views,
-                index_context_right + 1 - self.cfg.min_distance_to_context_views,
-                size=(self.cfg.num_target_views,),
-                device=device,
-            )
-
+            # index_target = torch.randint(
+            #     index_context_left + self.cfg.min_distance_to_context_views,
+            #     index_context_right + 1 - self.cfg.min_distance_to_context_views,
+            #     size=(self.cfg.num_target_views,),
+            #     device=device,
+            # )
+            # index_target = torch.randperm(3, device=device) + 1
+            index_target = torch.arange(1,4, device=device)
         # Apply modulo for circular datasets.
         if self.cameras_are_circular:
             index_target %= num_views

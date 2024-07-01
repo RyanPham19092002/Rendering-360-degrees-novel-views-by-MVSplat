@@ -52,7 +52,7 @@ with install_import_hook(
 #     if scene_name in test_cfgs and scene_views is not None:
 #         SCENES.append((scene_name, *scene_views["context"], 10.0, [100]))
 
-with open("assets/evaluation_index_re10k.json") as f:
+with open("assets/evaluation_index_VinAI_6_input_full_view_nctx2_nf_5000.json") as f:
     scene_cfgs = json.load(f)
 
 # scene_names = ("2e2ad99d45033d6a",)

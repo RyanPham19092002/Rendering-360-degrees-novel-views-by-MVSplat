@@ -34,5 +34,5 @@ def apply_patch_shim(batch: BatchedExample, patch_size: int) -> BatchedExample:
     return {
         **batch,
         "context": apply_patch_shim_to_views(batch["context"], patch_size),
-        "target": apply_patch_shim_to_views(batch["target"], patch_size),
+        # "target": apply_patch_shim_to_views(batch["target"], patch_size),
     }

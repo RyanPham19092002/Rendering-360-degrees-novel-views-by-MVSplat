@@ -63,8 +63,8 @@ def apply_bounds_shim(
         far_disparity,
     )
 
-    target = batch["target"]
-    _, tv, _, _, _ = target["image"].shape
+    # target = batch["target"]
+    # _, tv, _, _, _ = target["image"].shape
     return {
         **batch,
         "context": {
@@ -72,9 +72,9 @@ def apply_bounds_shim(
             "near": repeat(near, "b -> b v", v=cv),
             "far": repeat(far, "b -> b v", v=cv),
         },
-        "target": {
-            **target,
-            "near": repeat(near, "b -> b v", v=tv),
-            "far": repeat(far, "b -> b v", v=tv),
-        },
+        # "target": {
+        #     **target,
+        #     "near": repeat(near, "b -> b v", v=tv),
+        #     "far": repeat(far, "b -> b v", v=tv),
+        # },
     }

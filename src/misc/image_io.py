@@ -82,6 +82,7 @@ def save_video(
 
     # Create the parent directory if it doesn't already exist.
     path = Path(path)
+    print("-------------------path video rendering-----------", path)
     path.parent.mkdir(exist_ok=True, parents=True)
 
     # Save the image.

@@ -24,6 +24,7 @@ def get_projection_matrix(
     axis. Differs from the OpenGL version in that Z doesn't have range (-1, 1) after
     transformation and that Z is flipped.
     """
+    # print("far-cuda_splatting", far)
     tan_fov_x = (0.5 * fov_x).tan()
     tan_fov_y = (0.5 * fov_y).tan()
 
@@ -252,6 +253,7 @@ def render_depth_cuda(
 
     # Render using depth as color.
     b, _ = fake_color.shape
+    # print("far - cuda_splatting----------------------------", far)
     result = render_cuda(
         extrinsics,
         intrinsics,

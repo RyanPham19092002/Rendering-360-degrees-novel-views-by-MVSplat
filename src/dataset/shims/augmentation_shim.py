@@ -33,5 +33,5 @@ def apply_augmentation_shim(
     return {
         **example,
         "context": reflect_views(example["context"]),
-        "target": reflect_views(example["target"]),
+        # "target": reflect_views(example["target"]),
     }

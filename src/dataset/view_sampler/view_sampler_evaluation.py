@@ -21,6 +21,7 @@ class ViewSamplerEvaluationCfg:
     num_context_views: int
 
 
+
 class ViewSamplerEvaluation(ViewSampler[ViewSamplerEvaluationCfg]):
     index: dict[str, IndexEntry | None]
 
@@ -35,6 +36,7 @@ class ViewSamplerEvaluation(ViewSampler[ViewSamplerEvaluationCfg]):
         super().__init__(cfg, stage, is_overfitting, cameras_are_circular, step_tracker)
 
         dacite_config = Config(cast=[tuple])
+        # print("cfg.index_path-----------", cfg.index_path)
         with cfg.index_path.open("r") as f:
             self.index = {
                 k: None if v is None else from_dict(IndexEntry, v, dacite_config)
@@ -51,6 +53,7 @@ class ViewSamplerEvaluation(ViewSampler[ViewSamplerEvaluationCfg]):
         Int64[Tensor, " context_view"],  # indices for context views
         Int64[Tensor, " target_view"],  # indices for target views
     ]:
+        # print("self.index----------------", self.index)
         entry = self.index.get(scene)
         if entry is None:
             raise ValueError(f"No indices available for scene {scene}.")

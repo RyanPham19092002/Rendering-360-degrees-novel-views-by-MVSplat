@@ -1,0 +1,1 @@
+python src/scripts/convert_VinAI.py --input_dir /home/ubuntu/Workspace/phat-intern-dev/VinAI/subdata_mvsplat  --output_dir datasets/VinAI --json_file /home/ubuntu/Workspace/phat-intern-dev/VinAI/mvsplat/transforms_ego_sub_data.json --json_name index_VinAI_more_views_nf_5000_train.json

@@ -5,7 +5,8 @@ from typing import Optional, Protocol, runtime_checkable
 import moviepy.editor as mpy
 import torch
 import wandb
-from einops import pack, rearrange, repeat
+import cv2
+from einops import pack, rearrange, repeat, einsum
 from jaxtyping import Float
 from pytorch_lightning import LightningModule
 from pytorch_lightning.loggers.wandb import WandbLogger
@@ -13,7 +14,11 @@ from pytorch_lightning.utilities import rank_zero_only
 from torch import Tensor, nn, optim
 import numpy as np
 import json
+import open3d as o3d
+from PIL import Image
+import os
 
+from ..visualization.vis_depth import viz_depth_tensor
 from ..dataset.data_module import get_data_shim
 from ..dataset.types import BatchedExample
 from ..dataset import DatasetCfg
@@ -40,7 +45,18 @@ from ..visualization.validation_in_3d import render_cameras, render_projections
 from .decoder.decoder import Decoder, DepthRenderingMode
 from .encoder import Encoder
 from .encoder.visualization.encoder_visualizer import EncoderVisualizer
-
+from .interpolated_poses import get_interpolated_poses
+# from ...create_video import get_all_steps, create_video_from_images
+from src.geometry.projection import homogenize_points, project
+# Function to remove extra points or colors to match the number of points and colors
+def remove_extra(data, target_length):
+    if len(data) > target_length:
+        return data[:target_length]
+    elif len(data) < target_length:
+        ratio = len(data) / target_length
+        indices = [int(i * ratio) for i in range(target_length)]
+        return [data[i] for i in indices]
+    return data
 
 @dataclass
 class OptimizerCfg:
@@ -56,6 +72,8 @@ class TestCfg:
     save_image: bool
     save_video: bool
     eval_time_skip_steps: int
+    target : bool
+    translation_pose: float
 
 
 @dataclass
@@ -123,7 +141,7 @@ class ModelWrapper(LightningModule):
     def training_step(self, batch, batch_idx):
         batch: BatchedExample = self.data_shim(batch)
         _, _, _, h, w = batch["target"]["image"].shape
-
+        print("On train step--------------------------------------")
         # Run the model.
         gaussians = self.encoder(
             batch["context"], self.global_step, False, scene_names=batch["scene"]
@@ -158,10 +176,12 @@ class ModelWrapper(LightningModule):
             self.global_rank == 0
             and self.global_step % self.train_cfg.print_log_every_n_steps == 0
         ):
+            # print("batch train-----------------", batch)
             print(
                 f"train step {self.global_step}; "
                 f"scene = {[x[:20] for x in batch['scene']]}; "
                 f"context = {batch['context']['index'].tolist()}; "
+                f"target = {batch['target']['index'].tolist()}; "
                 f"bound = [{batch['context']['near'].detach().cpu().numpy().mean()} "
                 f"{batch['context']['far'].detach().cpu().numpy().mean()}]; "
                 f"loss = {total_loss:.6f}"
@@ -175,76 +195,461 @@ class ModelWrapper(LightningModule):
             self.step_tracker.set_step(self.global_step)
 
         return total_loss
-
+ 
     def test_step(self, batch, batch_idx):
-        batch: BatchedExample = self.data_shim(batch)
-        b, v, _, h, w = batch["target"]["image"].shape
-        assert b == 1
+        #--------------------------------view non target---------------------------------#
+        if not self.test_cfg.target:
+            
+            def save_interpolated_pose_to_json(index_pose, interpolated_pose, output_file):
+                # Open the file in append mode and write the interpolated pose
+                with open(output_file, 'a') as f:
+                    key = f"input_camera_{index_pose}"
+                    json.dump({key: interpolated_pose.tolist()}, f)
+                    f.write('\n')
 
-        # Render Gaussians.
-        with self.benchmarker.time("encoder"):
-            gaussians = self.encoder(
-                batch["context"],
-                self.global_step,
-                deterministic=False,
+            FIGURE_WIDTH = 500
+            MARGIN = 4
+            GAUSSIAN_TRIM = 8
+            LINE_WIDTH = 1.8
+            LINE_COLOR = [255, 0, 0]
+            POINT_DENSITY = 0.5
+            # print(intrinsic_matrix_raw[0,0,0])
+            batch: BatchedExample = self.data_shim(batch)
+            #b, v, _, h, w = batch["target"]["image"].shape
+            b, v, _, h, w = batch["context"]["image"].shape
+            assert b == 1
+            print("On test step--------------------------------------")
+            # Render Gaussians.
+            with self.benchmarker.time("encoder"):
+                gaussians = self.encoder(
+                    batch["context"],
+                    self.global_step,
+                    deterministic=False,
+                )
+                visualization_dump = {}
+                gaussians_forward = self.encoder.forward(
+                    batch["context"], False, visualization_dump=visualization_dump
+                )
+                
+                # print("gaussians_forward mean-----------------")
+                # print(gaussians_forward.means)
+                # print("gaussians_forward harmonics-----------------")
+                # print(gaussians_forward.harmonics)
+                # print("gaussians_forward opacities-----------------")
+                # print(gaussians_forward.opacities)
+            # print('batch["context"]["extrinsics"]--------------', batch["context"]["extrinsics"])
+            # print('batch["context"]["extrinsics"] type--------------', type(batch["context"]["extrinsics"]))
+            # print('batch["target"]["extrinsics"] shape--------------', batch["context"]["extrinsics"].shape)
+            # print('batch["context"]["intrinsics"]shape---------------------', batch["context"]["intrinsics"].shape)
+            # print('batch["context"]["intrinsics"]---------------------', batch["context"]["intrinsics"])
+            intrinsic_matrix = batch["context"]["intrinsics"][0][0].unsqueeze(0).unsqueeze(0)
+            # print('intrinsic_matrix---------------------', intrinsic_matrix.shape)
+            # print('intrinsic_matrix---------------------', intrinsic_matrix)
+            # print('batch["context"]["near"]shape---------------------', batch["context"]["near"].shape)
+            # print('batch["context"]["far"] shape---------------------', batch["context"]["far"].shape)
+            # print('batch["context"]["near"]---------------------', batch["context"]["near"])
+            # print('batch["context"]["far"]---------------------', batch["context"]["far"])
+            near_value = batch["context"]["near"][:, 0].unsqueeze(dim=1)
+            far_value = batch["context"]["far"][:, 0].unsqueeze(dim=1)
+            near = float(near_value.item())
+            far = float(far_value.item())           
+
+            pose_a = batch["context"]["extrinsics"][0][0]
+            pose_b = batch["context"]["extrinsics"][0][1]
+            pose_a = pose_a.cpu().numpy()
+            pose_b = pose_b.cpu().numpy()
+            # print("---------------before-------------------")
+            # print("pose_A", pose_a.shape)
+            # print("pose_A", pose_a)
+            # print("-----------------------------------")
+            # print("pose_b", pose_b.shape)
+            # print("pose_b", pose_b)
+            print("self.test_cfg.translation_pose", self.test_cfg.translation_pose)
+            pose_a[:2, 3] -= self.test_cfg.translation_pose             
+            pose_b[:2, 3] -= self.test_cfg.translation_pose   
+            # print("---------------after-------------------")
+            # print("pose_A", pose_a.shape)
+            # print("pose_A", pose_a)
+            # print("-----------------------------------")
+            # print("pose_b", pose_b.shape)
+            # print("pose_b", pose_b)
+            # exit(0)
+            step = "110k"
+            if self.test_cfg.translation_pose  != 0:
+                type_folder = f"_non-target_translation_{step}_step"
+            else:
+                type_folder = f"_non-target_{step}_step"
+            interpolated_poses = get_interpolated_poses(pose_a, pose_b, 20)
+            # print("interpolated_poses--------------", type(interpolated_poses))
+            points_list_depth = []
+            colors_list = []
+            for index_pose, interpolated_pose in enumerate(interpolated_poses):
+                (scene,) = batch["scene"]
+                name = get_cfg()["wandb"]["name"]
+                path = self.test_cfg.output_path / Path(name + "_non-target_translation")
+                folder_path = path / scene / f"near_{near}_far_{far}/"
+                os.makedirs(folder_path, exist_ok=True)
+                output_file = path / scene / f"near_{near}_far_{far}/extrinsic_pose_not_inv.json"
+                # print("index_pose------------------------", index_pose)
+                # print("-------------before-------------")
+                # print('interpolated_pose shape--------------', interpolated_pose.shape)
+                # print('interpolated_pose--------------', type(interpolated_pose))
+                last_row = np.array([0, 0, 0, 1], dtype=np.float32)
+                interpolated_pose = np.vstack([interpolated_pose, last_row])
+                save_interpolated_pose_to_json(index_pose, interpolated_pose, output_file)
+                interpolated_pose = torch.tensor(interpolated_pose).unsqueeze(0).unsqueeze(0)
+                # save_interpolated_pose_to_json(index_pose, interpolated_pose, output_file)
+                # print("-------------after-------------")
+                # print('interpolated_pose shape--------------',interpolated_pose.shape)
+                # print('interpolated_pose--------------', interpolated_pose)
+                # print('type interpolated_pose--------------', type(interpolated_pose))
+                with self.benchmarker.time("decoder", num_calls=v):
+
+                    # print('batch["context"]["extrinsics"]--------------', batch["context"]["extrinsics"])
+                    device = intrinsic_matrix.device
+                    # print(device)
+                    # Chuyển interpolated_pose lên cùng thiết bị
+                    interpolated_pose = interpolated_pose.to(device=device, dtype=torch.float32)
+                    # print("interpolated_pose--------------")
+                    # print(interpolated_pose.shape)
+                    # print(interpolated_pose)
+                    depth_mode="depth"
+                    output = self.decoder.forward(
+                        gaussians,
+                        # batch["target"]["extrinsics"],
+                        # batch["target"]["intrinsics"],
+                        # batch["target"]["near"],
+                        # batch["target"]["far"],
+                        interpolated_pose,
+                        intrinsic_matrix,
+                        near_value,
+                        far_value,
+                        (h, w),
+                        depth_mode=depth_mode,
+                    )
+
+                
+                images_prob = output.color[0]
+                # images_depth_prob = output.depth[0]
+                images_depth_prob = output.depth.cpu().detach()
+                save_path = path / scene / f"near_{near}_far_{far}/{depth_mode}"
+                os.makedirs(save_path, exist_ok=True)
+                save_path_file_ply = path / scene / f"near_{near}_far_{far}/file_ply"
+                os.makedirs(save_path_file_ply, exist_ok=True)
+                def convert_depth_map(depth_map, intrinsic_old, intrinsic_new):
+
+                    if isinstance(depth_map, torch.Tensor):
+                        depth_map = depth_map.cpu().numpy()
+
+                    if isinstance(intrinsic_old, torch.Tensor):
+                        intrinsic_old = intrinsic_old.cpu().numpy()
+
+                    if isinstance(intrinsic_new, torch.Tensor):
+                        intrinsic_new = intrinsic_new.cpu().numpy()
+
+                    H, W = depth_map.shape
+        
+                    # Tính toán ma trận biến đổi từ intrinsic_old sang intrinsic_new
+                    transform_matrix = intrinsic_new @ np.linalg.inv(intrinsic_old)
+                    
+                    # Tạo meshgrid cho tọa độ pixel
+                    y, x = np.meshgrid(np.arange(W), np.arange(H))
+                    
+                    # Chuyển về dạng flattened
+                    x = x.flatten()
+                    y = y.flatten()
+                    depth = depth_map.flatten()
+                    
+                    # Tạo ma trận [x, y, 1]
+                    ones = np.ones_like(x)
+                    coordinates = np.vstack((x, y, depth))
+                    
+                    # Áp dụng biến đổi để tính toán tọa độ mới
+                    new_coordinates = transform_matrix @ coordinates
+
+                    print("new_coordinates", new_coordinates)
+                    # Lấy ra tọa độ mới x, y và chia cho z để chuẩn hóa
+                    x_new = (new_coordinates[0][0, :] / new_coordinates[0][2, :]).reshape(H, W).astype(np.float32)
+                    y_new = (new_coordinates[0][1, :] / new_coordinates[0][2, :]).reshape(H, W).astype(np.float32)
+                    # x_new_normalized = (x_new / x_new.max() * (W - 1)).round()
+                    # y_new_normalized = (y_new / y_new.max() * (H - 1)).round()
+                    print("x_new, y_new", x_new, y_new)
+                    # Áp dụng remap để chuyển đổi depth map
+                    new_depth_map = cv2.remap(depth_map.astype(np.float32), x_new, y_new, interpolation=cv2.INTER_LINEAR)
+                    max_value = np.max(new_depth_map)
+
+                    print("Maximum value in new_depth_map:", max_value)
+                    return new_depth_map
+                #point cloud--------------------------------------------------------------------------------
+                # print("images_prob", images_prob)
+                # print("images_prob shape", images_prob.shape)    
+                # print("images_depth_prob", images_depth_prob)
+                # print("images_depth_prob shape", images_depth_prob.shape)
+                #rgb_gt = batch["target"]["image"][0]
+                print("scene-----------------", scene)
+                # Save images.
+                if self.test_cfg.save_image:
+                    name = [index_pose]
+                    # for index, color in zip(batch["target"]["index"][0], images_prob):
+                    for index, color in zip(name, images_prob):
+                        # print("color--------------")
+                        # print(color)
+                        save_image(color, path / scene / f"near_{near}_far_{far}/color/{index:0>4}.png")
+                    for index, depth in zip(name, images_depth_prob):
+                        for v_idx in range(images_depth_prob.shape[1]):
+                            # print("images_depth_prob[0, v_idx] shape", images_depth_prob[0, v_idx].shape)
+                            # print("images_depth_prob[0, v_idx]", images_depth_prob[0, v_idx])
+                            vis_depth = viz_depth_tensor(
+                               1 / images_depth_prob[0, v_idx], return_numpy=True
+                            ) 
+                            print(f"{save_path}/{index:0>4}.png")
+                            Image.fromarray(vis_depth).save(f"{save_path}/{index:0>4}.png")
+            print("Done extract images!!")
+            # save video
+            
+                    #     depth_map_normalized = depth.cpu().numpy()
+                    #     depth_map_normalized = cv2.normalize(depth_map_normalized, None, 0, 255, cv2.NORM_MINMAX)
+                    #     depth_map_8bit = np.uint8(depth_map_normalized)
+                    #     # depth_map_8bit = depth_map_normalized
+                    #     # print("depth_map_8bit", depth_map_8bit)
+                    #     # print("depth_map_8bit shape", depth_map_8bit.shape)
+                    #     depth_map_colored = cv2.applyColorMap(depth_map_8bit, cv2.COLORMAP_JET)
+                    #     save_path = path / scene / f"nf_5000/{depth_mode}"
+                    #     # print(save_path)
+                    #     save_path.mkdir(parents=True, exist_ok=True)
+                    #     cv2.imwrite(str(save_path/f"{index:0>4}.png"), depth_map_colored)
+
+                    #point cloud
+            
+            #         images_prob = images_prob.squeeze(0)
+            #         # images_depth_prob = (images_depth_prob.squeeze(0))
+            #         images_depth_prob = images_depth_prob[0, 0]
+            #         images_depth_prob = images_depth_prob.cpu().detach().numpy()
+            #         # images_depth_prob = cv2.normalize(images_depth_prob, None, 0, 255, cv2.NORM_MINMAX)
+            #         # images_depth_prob = np.uint8(images_depth_prob)
+
+            #         colors = images_prob.cpu().permute(1, 2, 0).reshape(-1, 3).numpy()
+                    
+            #         # print("images_depth_prob shape", images_depth_prob.shape)
+            #         # # print("colors ", colors)
+            #         print("images_depth_prob---------------") 
+            #         print(images_depth_prob)
+                    
+            #         intrinsic_matrix_cpu = intrinsic_matrix.squeeze(0).cpu().numpy()
+            #         intrinsic_new = np.array([[800, 0, 800], [0, 800, 464], [0, 0, 1]])
+            #         # new_depth_map = convert_depth_map(images_depth_prob, intrinsic_matrix_cpu, intrinsic_new)
+            #         # print("new_depth_map---------------") 
+            #         # print(new_depth_map)
+            #         # intrinsic_matrix_cpu = intrinsic_matrix_raw.squeeze(0)
+            #         # print("intrinsic_matrix_cpu-------------")
+            #         # print(intrinsic_matrix_cpu)
+            #         print("fx,fy,cx,cy", intrinsic_matrix_cpu[0, 0, 0],intrinsic_matrix_cpu[0, 1, 1], intrinsic_matrix_cpu[0, 0, 2], intrinsic_matrix_cpu[0, 1, 2])
+            #         intrinsic = o3d.camera.PinholeCameraIntrinsic(
+            #             width=256, 
+            #             height=256, 
+            #             fx=intrinsic_matrix_cpu[0, 0, 0], 
+            #             fy=intrinsic_matrix_cpu[0, 1, 1], 
+            #             cx=intrinsic_matrix_cpu[0, 0, 2], 
+            #             cy=intrinsic_matrix_cpu[0, 1, 2]
+            #         )
+                    
+            #         extrinsic = interpolated_pose.squeeze(0).cpu().numpy().reshape(4, 4).astype(np.float64)
+            #         print("extrinsic-------------")
+            #         print(extrinsic, extrinsic.shape)
+            #         #exit(0)
+            #         # depth_o3d = o3d.geometry.Image((new_depth_map * 1000).astype(np.uint16))  # Scaling depth to millimeters
+            #         # point_cloud_depth = o3d.geometry.PointCloud.create_from_depth_image(depth_o3d, intrinsic, extrinsic = extrinsic)
+            #         # points_depth = np.asarray(point_cloud_depth.points)
+            #         # print("points_depth shape------------", points_depth.shape)
+            #         # print("points_depth ------------", points_depth)
+            #         if points_depth.shape[0] != colors.shape[0]:
+            #             print(f"Number of points {points_depth.shape[0]} does not match number of colors {colors.shape[0]} for image {name}")
+            #             min_length = min(points_depth.shape[0], colors.shape[0])
+            #             points_depth = remove_extra(points_depth, min_length)
+            #             colors = remove_extra(colors, min_length)
+            #         points_list_depth.append(points_depth)
+            #         colors_list.append(colors)
+            
+            # points_depth_gen = np.concatenate(points_list_depth, axis=0)
+            # print("points_depth_gen", points_depth_gen)
+            # colors = np.concatenate(colors_list, axis=0)
+            # print("colors", colors)
+            # # print("points_depth shape -- colors shape", points_depth.shape, colors.shape)
+            # colors3d = o3d.utility.Vector3dVector(colors)
+            # # # Create a PointCloud object with colors
+            # pcd = o3d.geometry.PointCloud()
+            # pcd.points = o3d.utility.Vector3dVector(points_depth_gen)
+            # pcd.colors = colors3d
+            # print(f"Save point cloud scene {scene}")
+            # o3d.io.write_point_cloud(f"/home/ubuntu/Workspace/phat-intern-dev/VinAI/mvsplat/file_ply/nf_5000/{depth_mode}/point_cloud_with_colors_using_{scene}_mvsplat_20_pose.ply", pcd)
+            # print("Success!!------------------------------------------")
+        
+        
+        #--------------------------------------------------------------------------------#
+        #--------------------------------view target-------------------------------------#
+        else:
+
+            batch: BatchedExample = self.data_shim(batch)
+            b, v, _, h, w = batch["target"]["image"].shape
+            assert b == 1
+
+            # Render Gaussians.
+            with self.benchmarker.time("encoder"):
+                gaussians = self.encoder(
+                    batch["context"],
+                    self.global_step,
+                    deterministic=False,
+                )
+            with self.benchmarker.time("decoder", num_calls=v):
+                depth_mode="depth"
+                output = self.decoder.forward(
+                    gaussians,
+                    batch["target"]["extrinsics"],
+                    batch["target"]["intrinsics"],
+                    batch["target"]["near"],
+                    batch["target"]["far"],
+                    (h, w),
+                    depth_mode=depth_mode,
+                )
+            near_value = batch["context"]["near"][:, 0].unsqueeze(dim=1)
+            far_value = batch["context"]["far"][:, 0].unsqueeze(dim=1)
+            near = float(near_value.item())
+            far = float(far_value.item()) 
+            (scene,) = batch["scene"]
+            name = get_cfg()["wandb"]["name"]
+            step_folder = "110k"
+            path = self.test_cfg.output_path / Path(name + f'_target_{step_folder}_step')
+            folder_path = path / scene / f"near_{near}_far_{far}/"
+            os.makedirs(folder_path, exist_ok=True)
+            images_prob = output.color[0]
+            rgb_gt = batch["target"]["image"][0]
+            images_depth_prob = output.depth.cpu().detach()
+            save_path = path / scene / f"near_{near}_far_{far}/{depth_mode}"
+            os.makedirs(save_path, exist_ok=True)
+            #render depth target -----------------------------------------------------------------------
+            rgb_softmax = output.color[0]
+            images_depth_prob = output.depth.cpu().detach()
+            # Compute validation metrics.
+            rgb_gt = batch["target"]["image"][0]
+            for tag, rgb in zip(
+                ("val",), (rgb_softmax,)
+            ):
+                psnr = compute_psnr(rgb_gt, rgb).mean()
+                self.log(f"val/psnr_{tag}", psnr)
+                lpips = compute_lpips(rgb_gt, rgb).mean()
+                self.log(f"val/lpips_{tag}", lpips)
+                ssim = compute_ssim(rgb_gt, rgb).mean()
+                self.log(f"val/ssim_{tag}", ssim)
+            
+            # Construct comparison image.
+            comparison = hcat(
+                add_label(vcat(*batch["context"]["image"][0]), "Context"),
+                add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
+                add_label(vcat(*rgb_softmax), "Target (Softmax)"),
             )
-        with self.benchmarker.time("decoder", num_calls=v):
-            output = self.decoder.forward(
-                gaussians,
-                batch["target"]["extrinsics"],
-                batch["target"]["intrinsics"],
-                batch["target"]["near"],
-                batch["target"]["far"],
-                (h, w),
-                depth_mode=None,
+            self.logger.log_image(
+                str(os.path.join("comparison", Path(name + f'_target_{step_folder}_step')/ scene / f"near_{near}_far_{far}/")),
+                [prep_image(add_border(comparison))],
+                step=self.global_step,
+                caption=batch["scene"],
+            )
+            # render depthmap validation
+            vis_depth_list = []
+            for v_idx in range(images_depth_prob.shape[1]):
+                vis_depth = viz_depth_tensor(
+                    1.0 / images_depth_prob[0, v_idx], return_numpy=True
+                ) 
+
+                vis_depth_list.append(torch.from_numpy(vis_depth/255.))
+            vis_depth_tensor = torch.stack(vis_depth_list).permute(0, 3, 1, 2)
+
+            depth = hcat(
+                add_label(vcat(*batch["context"]["image"][0]), "Context"),
+                add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
+                add_label(vcat(*vis_depth_tensor), "Target depth"),
+            )
+            self.logger.log_image(
+                str(os.path.join("depth", Path(name + f'_target_{step_folder}_step')/ scene / f"near_{near}_far_{far}/")),
+                # "depth",
+                [prep_image(add_border(depth))],
+                step=self.global_step,
+                caption=batch["scene"],
+            )
+            # Render projections and construct projection image.
+            projections = hcat(*render_projections(
+                                    gaussians,
+                                    256,
+                                    extra_label="(Softmax)",
+                                )[0])
+            self.logger.log_image(
+                str(os.path.join("projection", Path(name + f'_target_{step_folder}_step')/ scene / f"near_{near}_far_{far}/")),
+                # "projection",
+                [prep_image(add_border(projections))],
+                step=self.global_step,
             )
 
-        (scene,) = batch["scene"]
-        name = get_cfg()["wandb"]["name"]
-        path = self.test_cfg.output_path / name
-        images_prob = output.color[0]
-        rgb_gt = batch["target"]["image"][0]
-
-        # Save images.
-        if self.test_cfg.save_image:
-            for index, color in zip(batch["target"]["index"][0], images_prob):
-                save_image(color, path / scene / f"color/{index:0>6}.png")
-
-        # save video
-        if self.test_cfg.save_video:
-            frame_str = "_".join([str(x.item()) for x in batch["context"]["index"][0]])
-            save_video(
-                [a for a in images_prob],
-                path / "video" / f"{scene}_frame_{frame_str}.mp4",
+            # Draw cameras.
+            cameras = hcat(*render_cameras(batch, 256))
+            self.logger.log_image(
+                str(os.path.join("cameras", Path(name + f'_target_{step_folder}_step')/ scene / f"near_{near}_far_{far}/")),
+                # "cameras", 
+                [prep_image(add_border(cameras))], step=self.global_step
             )
 
-        # compute scores
-        if self.test_cfg.compute_scores:
-            if batch_idx < self.test_cfg.eval_time_skip_steps:
-                self.time_skip_steps_dict["encoder"] += 1
-                self.time_skip_steps_dict["decoder"] += v
-            rgb = images_prob
+            if self.encoder_visualizer is not None:
+                for k, image in self.encoder_visualizer.visualize(
+                    batch["context"], self.global_step
+                ).items():
+                    self.logger.log_image(k, [prep_image(image)], step=self.global_step)
+            # Save images.
+            if self.test_cfg.save_image:
+                # print('batch["target"]["index"][0]', batch["target"]["index"][0])
+                for index, color in zip(batch["target"]["index"][0], images_prob):
+                    save_image(color, path / scene / f"near_{near}_far_{far}/color/{index:0>4}.png")
+                # name = [1,2,3]
+                # print('batch["target"]["index"][0]', batch["target"]["index"][0])
+                
+                # for index, depth in zip(name, images_depth_prob):
+                for v_idx in range(images_depth_prob.shape[1]):
+                    # print("images_depth_prob[0, v_idx] shape", images_depth_prob[0, v_idx].cpu().numpy().shape)
+                    # print("images_depth_prob[0, v_idx]", images_depth_prob[0, v_idx].cpu().numpy())
+                    
+                    vis_depth = viz_depth_tensor(
+                        1.0 / images_depth_prob[0, v_idx], return_numpy=True
+                    ) 
+                    print(f"{save_path}/{(v_idx+1):0>4}.png")
+                    Image.fromarray(vis_depth).save(f"{save_path}/{(v_idx+1):0>4}.png")
+            # compute scores
+            if self.test_cfg.compute_scores:
+                if batch_idx < self.test_cfg.eval_time_skip_steps:
+                    self.time_skip_steps_dict["encoder"] += 1
+                    self.time_skip_steps_dict["decoder"] += v
+                rgb = images_prob
 
-            if f"psnr" not in self.test_step_outputs:
-                self.test_step_outputs[f"psnr"] = []
-            if f"ssim" not in self.test_step_outputs:
-                self.test_step_outputs[f"ssim"] = []
-            if f"lpips" not in self.test_step_outputs:
-                self.test_step_outputs[f"lpips"] = []
+                if f"psnr" not in self.test_step_outputs:
+                    self.test_step_outputs[f"psnr"] = []
+                if f"ssim" not in self.test_step_outputs:
+                    self.test_step_outputs[f"ssim"] = []
+                if f"lpips" not in self.test_step_outputs:
+                    self.test_step_outputs[f"lpips"] = []
 
-            self.test_step_outputs[f"psnr"].append(
-                compute_psnr(rgb_gt, rgb).mean().item()
-            )
-            self.test_step_outputs[f"ssim"].append(
-                compute_ssim(rgb_gt, rgb).mean().item()
-            )
-            self.test_step_outputs[f"lpips"].append(
-                compute_lpips(rgb_gt, rgb).mean().item()
-            )
-
+                self.test_step_outputs[f"psnr"].append(
+                    compute_psnr(rgb_gt, rgb).mean().item()
+                )
+                self.test_step_outputs[f"ssim"].append(
+                    compute_ssim(rgb_gt, rgb).mean().item()
+                )
+                self.test_step_outputs[f"lpips"].append(
+                    compute_lpips(rgb_gt, rgb).mean().item()
+                )
+        
+        # if self.test_cfg.save_video:
+        #         # input_dir =
+        #         print("Done extract video!!")
+        
     def on_test_end(self) -> None:
         name = get_cfg()["wandb"]["name"]
-        out_dir = self.test_cfg.output_path / name
+        out_dir = self.test_cfg.output_path / Path(name + '_target')
         saved_scores = {}
         if self.test_cfg.compute_scores:
             self.benchmarker.dump_memory(out_dir / "peak_memory.json")
@@ -278,15 +683,18 @@ class ModelWrapper(LightningModule):
 
     @rank_zero_only
     def validation_step(self, batch, batch_idx):
+        # print("batch validation------", batch)
         batch: BatchedExample = self.data_shim(batch)
-
+        print("In validation step-------------------------------------")
         if self.global_rank == 0:
             print(
+                # batch['context'],
                 f"validation step {self.global_step}; "
                 f"scene = {[a[:20] for a in batch['scene']]}; "
-                f"context = {batch['context']['index'].tolist()}"
+                f"context = {batch['context']['index'].tolist()};"
+                f"target = {batch['target']['index'].tolist()};"
             )
-
+            # print("batch------", batch)
         # Render Gaussians.
         b, _, _, h, w = batch["target"]["image"].shape
         assert b == 1
@@ -300,11 +708,12 @@ class ModelWrapper(LightningModule):
             batch["target"]["extrinsics"],
             batch["target"]["intrinsics"],
             batch["target"]["near"],
-            batch["target"]["far"],
+            batch["target"]["far"],            
             (h, w),
+            depth_mode="depth"
         )
         rgb_softmax = output_softmax.color[0]
-
+        images_depth_prob = output_softmax.depth.cpu().detach()
         # Compute validation metrics.
         rgb_gt = batch["target"]["image"][0]
         for tag, rgb in zip(
@@ -316,7 +725,7 @@ class ModelWrapper(LightningModule):
             self.log(f"val/lpips_{tag}", lpips)
             ssim = compute_ssim(rgb_gt, rgb).mean()
             self.log(f"val/ssim_{tag}", ssim)
-
+        
         # Construct comparison image.
         comparison = hcat(
             add_label(vcat(*batch["context"]["image"][0]), "Context"),
@@ -329,7 +738,27 @@ class ModelWrapper(LightningModule):
             step=self.global_step,
             caption=batch["scene"],
         )
+        # render depthmap validation
+        vis_depth_list = []
+        for v_idx in range(images_depth_prob.shape[1]):
+            vis_depth = viz_depth_tensor(
+                1.0 / images_depth_prob[0, v_idx], return_numpy=True
+            ) 
 
+            vis_depth_list.append(torch.from_numpy(vis_depth/255.))
+        vis_depth_tensor = torch.stack(vis_depth_list).permute(0, 3, 1, 2)
+
+        depth = hcat(
+            add_label(vcat(*batch["context"]["image"][0]), "Context"),
+            add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
+            add_label(vcat(*vis_depth_tensor), "Target depth"),
+        )
+        self.logger.log_image(
+            "depth",
+            [prep_image(add_border(depth))],
+            step=self.global_step,
+            caption=batch["scene"],
+        )
         # Render projections and construct projection image.
         projections = hcat(*render_projections(
                                 gaussians_softmax,
@@ -355,10 +784,10 @@ class ModelWrapper(LightningModule):
                 self.logger.log_image(k, [prep_image(image)], step=self.global_step)
 
         # Run video validation step.
-        self.render_video_interpolation(batch)
-        self.render_video_wobble(batch)
-        if self.train_cfg.extended_visualization:
-            self.render_video_interpolation_exaggerated(batch)
+        # self.render_video_interpolation(batch)
+        # self.render_video_wobble(batch)
+        # if self.train_cfg.extended_visualization:
+        #     self.render_video_interpolation_exaggerated(batch)
 
     @rank_zero_only
     def render_video_wobble(self, batch: BatchedExample) -> None:
@@ -394,8 +823,8 @@ class ModelWrapper(LightningModule):
                 batch["context"]["extrinsics"][0, 0],
                 (
                     batch["context"]["extrinsics"][0, 1]
-                    if v == 2
-                    else batch["target"]["extrinsics"][0, 0]
+                    # if v == 2
+                    # else batch["target"]["extrinsics"][0, 0]
                 ),
                 t,
             )
@@ -403,8 +832,8 @@ class ModelWrapper(LightningModule):
                 batch["context"]["intrinsics"][0, 0],
                 (
                     batch["context"]["intrinsics"][0, 1]
-                    if v == 2
-                    else batch["target"]["intrinsics"][0, 0]
+                    # if v == 2
+                    # else batch["target"]["intrinsics"][0, 0]
                 ),
                 t,
             )
@@ -433,8 +862,8 @@ class ModelWrapper(LightningModule):
                 batch["context"]["extrinsics"][0, 0],
                 (
                     batch["context"]["extrinsics"][0, 1]
-                    if v == 2
-                    else batch["target"]["extrinsics"][0, 0]
+                    # if v == 2
+                    # else batch["target"]["extrinsics"][0, 0]
                 ),
                 t * 5 - 2,
             )
@@ -442,8 +871,8 @@ class ModelWrapper(LightningModule):
                 batch["context"]["intrinsics"][0, 0],
                 (
                     batch["context"]["intrinsics"][0, 1]
-                    if v == 2
-                    else batch["target"]["intrinsics"][0, 0]
+                    # if v == 2
+                    # else batch["target"]["intrinsics"][0, 0]
                 ),
                 t * 5 - 2,
             )
