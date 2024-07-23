@@ -75,6 +75,8 @@ class DecoderSplattingCUDA(Decoder[DecoderSplattingCUDACfg]):
         # )
         return DecoderOutput(
             color,
+            # None if depth_mode is None
+            # else depth
             depth
         )
 
@@ -89,6 +91,7 @@ class DecoderSplattingCUDA(Decoder[DecoderSplattingCUDACfg]):
         mode: DepthRenderingMode = "depth",
     ) -> Float[Tensor, "batch view height width"]:
         b, v, _, _ = extrinsics.shape
+        print("b,v", b,v)
         result = render_depth_cuda(
             rearrange(extrinsics, "b v i j -> (b v) i j"),
             rearrange(intrinsics, "b v i j -> (b v) i j"),

@@ -2,11 +2,11 @@ from math import isqrt
 from typing import Literal
 
 import torch
-from diff_gaussian_rasterization import (
-    GaussianRasterizationSettings,
-    GaussianRasterizer,
-)
-# from diff_gauss import GaussianRasterizationSettings, GaussianRasterizer
+# from diff_gaussian_rasterization import (
+#     GaussianRasterizationSettings,
+#     GaussianRasterizer,
+# )
+from diff_gauss import GaussianRasterizationSettings, GaussianRasterizer
 from einops import einsum, rearrange, repeat
 from jaxtyping import Float
 from torch import Tensor
@@ -91,11 +91,9 @@ def render_cuda(
     full_projection = view_matrix @ projection_matrix
 
     all_images = []
-
-    all_depth_maps = []
+    all_rendered_depth = []
     for i in range(b):
         # Set up a tensor for the gradients of the screen-space means.
-        
         mean_gradients = torch.zeros_like(gaussian_means[i], requires_grad=True)
         try:
             mean_gradients.retain_grad()
@@ -119,9 +117,20 @@ def render_cuda(
         rasterizer = GaussianRasterizer(settings)
 
         row, col = torch.triu_indices(3, 3)
+        default_scales = torch.Tensor([])  # Không sử dụng scales
+        default_rotations = torch.Tensor([])  # Sử dụng ma trận đơn vị 3x3 làm rotations
 
         # Gọi hàm rasterizer với các tham số được điều chỉnh
-        # rendered_image, rendered_depth, rendered_alpha, radii = rasterizer(
+        rendered_image, rendered_depth, _, _ = rasterizer(
+            means3D=gaussian_means[i],
+            means2D=mean_gradients,
+            shs=shs[i] if use_sh else None,
+            colors_precomp=None if use_sh else shs[i, :, 0, :],
+            opacities=gaussian_opacities[i, ..., None],
+            cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
+            # cov3D_precomp=gaussian_covariances[i, :, row, col],
+        )
+        # image, feature_map, alpha_mask, depth_map, radii = rasterizer(
         #     means3D=gaussian_means[i],
         #     means2D=mean_gradients,
         #     shs=shs[i] if use_sh else None,
@@ -132,23 +141,12 @@ def render_cuda(
         #     cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
         #     # cov3D_precomp=gaussian_covariances[i, :, row, col],
         # )
-        image, _, depth_map, _= rasterizer(
-            means3D=gaussian_means[i],
-            means2D=mean_gradients,
-            shs=shs[i] if use_sh else None,
-            colors_precomp=None if use_sh else shs[i, :, 0, :],
-            opacities=gaussian_opacities[i, ..., None],
-            scales=None,
-            rotations=None,
-            cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
-            # cov3D_precomp=gaussian_covariances[i, :, row, col],
-        )
-        
-        all_images.append(image)
-        all_depth_maps.append(depth_map.squeeze(0))
-    all_images = torch.stack(all_images)
-    all_depth_maps = torch.stack(all_depth_maps)
-    return all_images, all_depth_maps
+        # print("rendered_image shape", rendered_image.shape)
+        # print("rendered_depth shape", rendered_depth.shape)
+        all_images.append(rendered_image)
+        # all_rendered_depth.append(depth_map)
+        all_rendered_depth.append(rendered_depth.squeeze(0))
+    return torch.stack(all_images), torch.stack(all_rendered_depth)
 
 
 def render_cuda_orthographic(
@@ -205,7 +203,7 @@ def render_cuda_orthographic(
     full_projection = view_matrix @ projection_matrix
 
     all_images = []
-
+    all_radii = []
     for i in range(b):
         # Set up a tensor for the gradients of the screen-space means.
         mean_gradients = torch.zeros_like(gaussian_means[i], requires_grad=True)
@@ -240,7 +238,16 @@ def render_cuda_orthographic(
         #     opacities=gaussian_opacities[i, ..., None],
         #     cov3D_precomp=gaussian_covariances[i, :, row, col],
         # )
-        # rendered_image, rendered_depth, rendered_alpha, radii = rasterizer(
+        rendered_image, _, _, _ = rasterizer(
+            means3D=gaussian_means[i],
+            means2D=mean_gradients,
+            shs=shs[i] if use_sh else None,
+            colors_precomp=None if use_sh else shs[i, :, 0, :],
+            opacities=gaussian_opacities[i, ..., None],
+            cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
+            # cov3D_precomp=gaussian_covariances[i, :, row, col],
+        )
+        # image, feature_map, alpha_mask, depth_map, radii = rasterizer(
         #     means3D=gaussian_means[i],
         #     means2D=mean_gradients,
         #     shs=shs[i] if use_sh else None,
@@ -251,26 +258,8 @@ def render_cuda_orthographic(
         #     cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
         #     # cov3D_precomp=gaussian_covariances[i, :, row, col],
         # )
-        image, _, _, _ = rasterizer(
-            means3D=gaussian_means[i],
-            means2D=mean_gradients,
-            shs=shs[i] if use_sh else None,
-            colors_precomp=None if use_sh else shs[i, :, 0, :],
-            opacities=gaussian_opacities[i, ..., None],
-            scales=None,
-            rotations=None,
-            cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
-            # cov3D_precomp=gaussian_covariances[i, :, row, col],
-        )
-        all_images.append(image)
-        # all_feature_maps.append(feature_map)
-        # all_masks.append(mask.squeeze(0))
-        # all_depth_maps.append(depth_map.squeeze(0))
-    all_images = torch.stack(all_images)
-    # all_feature_maps = torch.stack(all_feature_maps) if all_feature_maps[0] is not None else None
-    # all_masks = torch.stack(all_masks)
-    # all_depth_maps = torch.stack(all_depth_maps)
-    return all_images
+        all_images.append(rendered_image)
+    return torch.stack(all_images)
     #     all_images.append(image)
     #     all_radii.append(radii)
     # return torch.stack(all_images)

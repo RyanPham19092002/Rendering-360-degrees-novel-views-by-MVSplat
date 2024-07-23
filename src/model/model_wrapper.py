@@ -14,7 +14,7 @@ from pytorch_lightning.utilities import rank_zero_only
 from torch import Tensor, nn, optim
 import numpy as np
 import json
-import open3d as o3d
+# import open3d as o3d
 from PIL import Image
 import os
 
@@ -140,7 +140,10 @@ class ModelWrapper(LightningModule):
 
     def training_step(self, batch, batch_idx):
         batch: BatchedExample = self.data_shim(batch)
+        # print("batch depth img", batch["target"]["image_depth"])
+        # print("batch depth img shape", batch["target"]["image_depth"].shape)
         _, _, _, h, w = batch["target"]["image"].shape
+        # print("h,w on train step", h,w)
         print("On train step--------------------------------------")
         # Run the model.
         gaussians = self.encoder(
@@ -156,7 +159,14 @@ class ModelWrapper(LightningModule):
             depth_mode=self.train_cfg.depth_mode,
         )
         target_gt = batch["target"]["image"]
-
+        # print("target_gt shape", target_gt.shape)
+        # print("output.color shape", output.color.shape)
+        target_depth_images = batch["target"]["image_depth"]
+        # depth_map_pred = output.depth
+        # print("depth_map_pred", depth_map_pred)
+        # print("depth_map_pred shape", depth_map_pred.shape)
+ 
+        
         # Compute metrics.
         psnr_probabilistic = compute_psnr(
             rearrange(target_gt, "b v c h w -> (b v) c h w"),
@@ -167,7 +177,9 @@ class ModelWrapper(LightningModule):
         # Compute and log loss.
         total_loss = 0
         for loss_fn in self.losses:
+            # print(f"--------------------------{loss_fn}-----------------------------")
             loss = loss_fn.forward(output, batch, gaussians, self.global_step)
+            # print("loss", loss)
             self.log(f"loss/{loss_fn.name}", loss)
             total_loss = total_loss + loss
         self.log("loss/total", total_loss)
@@ -198,8 +210,9 @@ class ModelWrapper(LightningModule):
  
     def test_step(self, batch, batch_idx):
         #--------------------------------view non target---------------------------------#
+        
         if not self.test_cfg.target:
-            
+            print("batch", batch)
             def save_interpolated_pose_to_json(index_pose, interpolated_pose, output_file):
                 # Open the file in append mode and write the interpolated pose
                 with open(output_file, 'a') as f:
@@ -217,6 +230,7 @@ class ModelWrapper(LightningModule):
             batch: BatchedExample = self.data_shim(batch)
             #b, v, _, h, w = batch["target"]["image"].shape
             b, v, _, h, w = batch["context"]["image"].shape
+            print("h, w on test step", h, w)
             assert b == 1
             print("On test step--------------------------------------")
             # Render Gaussians.
@@ -265,8 +279,14 @@ class ModelWrapper(LightningModule):
             # print("pose_b", pose_b.shape)
             # print("pose_b", pose_b)
             print("self.test_cfg.translation_pose", self.test_cfg.translation_pose)
-            pose_a[:2, 3] -= self.test_cfg.translation_pose             
-            pose_b[:2, 3] -= self.test_cfg.translation_pose   
+            #raw
+            # pose_a[:2, 3] -= self.test_cfg.translation_pose             
+            # pose_b[:2, 3] -= self.test_cfg.translation_pose   
+            #3rd view
+            pose_a[:1, 3] -= self.test_cfg.translation_pose             
+            pose_b[:1, 3] -= self.test_cfg.translation_pose   
+            pose_a[2, 3] = 1.25        
+            pose_b[2, 3] = 1.25
             # print("---------------after-------------------")
             # print("pose_A", pose_a.shape)
             # print("pose_A", pose_a)
@@ -274,7 +294,7 @@ class ModelWrapper(LightningModule):
             # print("pose_b", pose_b.shape)
             # print("pose_b", pose_b)
             # exit(0)
-            step = "110k"
+            step = "3view_test_route1_110k"
             if self.test_cfg.translation_pose  != 0:
                 type_folder = f"_non-target_translation_{step}_step"
             else:
@@ -286,7 +306,7 @@ class ModelWrapper(LightningModule):
             for index_pose, interpolated_pose in enumerate(interpolated_poses):
                 (scene,) = batch["scene"]
                 name = get_cfg()["wandb"]["name"]
-                path = self.test_cfg.output_path / Path(name + "_non-target_translation")
+                path = self.test_cfg.output_path / Path(name + type_folder)
                 folder_path = path / scene / f"near_{near}_far_{far}/"
                 os.makedirs(folder_path, exist_ok=True)
                 output_file = path / scene / f"near_{near}_far_{far}/extrinsic_pose_not_inv.json"
@@ -397,7 +417,7 @@ class ModelWrapper(LightningModule):
                         save_image(color, path / scene / f"near_{near}_far_{far}/color/{index:0>4}.png")
                     for index, depth in zip(name, images_depth_prob):
                         for v_idx in range(images_depth_prob.shape[1]):
-                            # print("images_depth_prob[0, v_idx] shape", images_depth_prob[0, v_idx].shape)
+                            print("images_depth_prob[0, v_idx] shape", images_depth_prob[0, v_idx].shape)
                             # print("images_depth_prob[0, v_idx]", images_depth_prob[0, v_idx])
                             vis_depth = viz_depth_tensor(
                                1 / images_depth_prob[0, v_idx], return_numpy=True
@@ -405,86 +425,7 @@ class ModelWrapper(LightningModule):
                             print(f"{save_path}/{index:0>4}.png")
                             Image.fromarray(vis_depth).save(f"{save_path}/{index:0>4}.png")
             print("Done extract images!!")
-            # save video
-            
-                    #     depth_map_normalized = depth.cpu().numpy()
-                    #     depth_map_normalized = cv2.normalize(depth_map_normalized, None, 0, 255, cv2.NORM_MINMAX)
-                    #     depth_map_8bit = np.uint8(depth_map_normalized)
-                    #     # depth_map_8bit = depth_map_normalized
-                    #     # print("depth_map_8bit", depth_map_8bit)
-                    #     # print("depth_map_8bit shape", depth_map_8bit.shape)
-                    #     depth_map_colored = cv2.applyColorMap(depth_map_8bit, cv2.COLORMAP_JET)
-                    #     save_path = path / scene / f"nf_5000/{depth_mode}"
-                    #     # print(save_path)
-                    #     save_path.mkdir(parents=True, exist_ok=True)
-                    #     cv2.imwrite(str(save_path/f"{index:0>4}.png"), depth_map_colored)
-
-                    #point cloud
-            
-            #         images_prob = images_prob.squeeze(0)
-            #         # images_depth_prob = (images_depth_prob.squeeze(0))
-            #         images_depth_prob = images_depth_prob[0, 0]
-            #         images_depth_prob = images_depth_prob.cpu().detach().numpy()
-            #         # images_depth_prob = cv2.normalize(images_depth_prob, None, 0, 255, cv2.NORM_MINMAX)
-            #         # images_depth_prob = np.uint8(images_depth_prob)
-
-            #         colors = images_prob.cpu().permute(1, 2, 0).reshape(-1, 3).numpy()
-                    
-            #         # print("images_depth_prob shape", images_depth_prob.shape)
-            #         # # print("colors ", colors)
-            #         print("images_depth_prob---------------") 
-            #         print(images_depth_prob)
-                    
-            #         intrinsic_matrix_cpu = intrinsic_matrix.squeeze(0).cpu().numpy()
-            #         intrinsic_new = np.array([[800, 0, 800], [0, 800, 464], [0, 0, 1]])
-            #         # new_depth_map = convert_depth_map(images_depth_prob, intrinsic_matrix_cpu, intrinsic_new)
-            #         # print("new_depth_map---------------") 
-            #         # print(new_depth_map)
-            #         # intrinsic_matrix_cpu = intrinsic_matrix_raw.squeeze(0)
-            #         # print("intrinsic_matrix_cpu-------------")
-            #         # print(intrinsic_matrix_cpu)
-            #         print("fx,fy,cx,cy", intrinsic_matrix_cpu[0, 0, 0],intrinsic_matrix_cpu[0, 1, 1], intrinsic_matrix_cpu[0, 0, 2], intrinsic_matrix_cpu[0, 1, 2])
-            #         intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            #             width=256, 
-            #             height=256, 
-            #             fx=intrinsic_matrix_cpu[0, 0, 0], 
-            #             fy=intrinsic_matrix_cpu[0, 1, 1], 
-            #             cx=intrinsic_matrix_cpu[0, 0, 2], 
-            #             cy=intrinsic_matrix_cpu[0, 1, 2]
-            #         )
-                    
-            #         extrinsic = interpolated_pose.squeeze(0).cpu().numpy().reshape(4, 4).astype(np.float64)
-            #         print("extrinsic-------------")
-            #         print(extrinsic, extrinsic.shape)
-            #         #exit(0)
-            #         # depth_o3d = o3d.geometry.Image((new_depth_map * 1000).astype(np.uint16))  # Scaling depth to millimeters
-            #         # point_cloud_depth = o3d.geometry.PointCloud.create_from_depth_image(depth_o3d, intrinsic, extrinsic = extrinsic)
-            #         # points_depth = np.asarray(point_cloud_depth.points)
-            #         # print("points_depth shape------------", points_depth.shape)
-            #         # print("points_depth ------------", points_depth)
-            #         if points_depth.shape[0] != colors.shape[0]:
-            #             print(f"Number of points {points_depth.shape[0]} does not match number of colors {colors.shape[0]} for image {name}")
-            #             min_length = min(points_depth.shape[0], colors.shape[0])
-            #             points_depth = remove_extra(points_depth, min_length)
-            #             colors = remove_extra(colors, min_length)
-            #         points_list_depth.append(points_depth)
-            #         colors_list.append(colors)
-            
-            # points_depth_gen = np.concatenate(points_list_depth, axis=0)
-            # print("points_depth_gen", points_depth_gen)
-            # colors = np.concatenate(colors_list, axis=0)
-            # print("colors", colors)
-            # # print("points_depth shape -- colors shape", points_depth.shape, colors.shape)
-            # colors3d = o3d.utility.Vector3dVector(colors)
-            # # # Create a PointCloud object with colors
-            # pcd = o3d.geometry.PointCloud()
-            # pcd.points = o3d.utility.Vector3dVector(points_depth_gen)
-            # pcd.colors = colors3d
-            # print(f"Save point cloud scene {scene}")
-            # o3d.io.write_point_cloud(f"/home/ubuntu/Workspace/phat-intern-dev/VinAI/mvsplat/file_ply/nf_5000/{depth_mode}/point_cloud_with_colors_using_{scene}_mvsplat_20_pose.ply", pcd)
-            # print("Success!!------------------------------------------")
-        
-        
+    
         #--------------------------------------------------------------------------------#
         #--------------------------------view target-------------------------------------#
         else:
@@ -517,13 +458,33 @@ class ModelWrapper(LightningModule):
             far = float(far_value.item()) 
             (scene,) = batch["scene"]
             name = get_cfg()["wandb"]["name"]
-            step_folder = "110k"
+            step_folder = "route2_110k"
             path = self.test_cfg.output_path / Path(name + f'_target_{step_folder}_step')
             folder_path = path / scene / f"near_{near}_far_{far}/"
             os.makedirs(folder_path, exist_ok=True)
             images_prob = output.color[0]
             rgb_gt = batch["target"]["image"][0]
+            depth_gt = batch["target"]["image_depth"].cpu().detach()
+            print("depth_gt shape", depth_gt.shape)
+            batch_size, num_views, height, width = depth_gt.shape
+            for b in range(batch_size):
+                for v in range(num_views):
+                    # Lấy depth map
+                    depth_map = depth_gt[b, v, :, :]
+
+                    # Tạo một mask với các giá trị depth <= 100
+                    mask = (depth_map <= 100).numpy().astype(np.uint8)
+
+                    # Tạo tên file cho từng depth map
+                    filename = f"binary_mask_batch{b}_view{v}.png"
+
+                    # Lưu mask dưới dạng ảnh
+                    cv2.imwrite(filename, mask * 255)
+            exit(0)
+            #---------------------------------------------------------------------
+            
             images_depth_prob = output.depth.cpu().detach()
+            # print("images_depth_prob shape", images_depth_prob.shape)
             save_path = path / scene / f"near_{near}_far_{far}/{depth_mode}"
             os.makedirs(save_path, exist_ok=True)
             #render depth target -----------------------------------------------------------------------
@@ -553,20 +514,32 @@ class ModelWrapper(LightningModule):
                 step=self.global_step,
                 caption=batch["scene"],
             )
+            # render depthmap gt
+            vis_depth_gt_list = []
+            for v_idx in range(depth_gt.shape[1]):
+                # print("depth_gt[0, v_idx] shape", depth_gt[0, v_idx].shape)
+                vis_depth_gt = viz_depth_tensor(
+                    1.0 / depth_gt[0, v_idx], return_numpy=True
+                ) 
+
+                vis_depth_gt_list.append(torch.from_numpy(vis_depth_gt/255.))
+            vis_depth_gt_tensor = torch.stack(vis_depth_gt_list).permute(0, 3, 1, 2)
             # render depthmap validation
             vis_depth_list = []
             for v_idx in range(images_depth_prob.shape[1]):
+                # print("images_depth_prob[0, v_idx] shape", images_depth_prob[0, v_idx].shape)
                 vis_depth = viz_depth_tensor(
                     1.0 / images_depth_prob[0, v_idx], return_numpy=True
                 ) 
 
                 vis_depth_list.append(torch.from_numpy(vis_depth/255.))
             vis_depth_tensor = torch.stack(vis_depth_list).permute(0, 3, 1, 2)
+            
 
             depth = hcat(
                 add_label(vcat(*batch["context"]["image"][0]), "Context"),
-                add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
-                add_label(vcat(*vis_depth_tensor), "Target depth"),
+                add_label(vcat(*vis_depth_gt_tensor), "Depth (Ground Truth)"),
+                add_label(vcat(*vis_depth_tensor), "Predict depth"),
             )
             self.logger.log_image(
                 str(os.path.join("depth", Path(name + f'_target_{step_folder}_step')/ scene / f"near_{near}_far_{far}/")),
@@ -714,8 +687,11 @@ class ModelWrapper(LightningModule):
         )
         rgb_softmax = output_softmax.color[0]
         images_depth_prob = output_softmax.depth.cpu().detach()
+        # print("images_depth_prob shape", images_depth_prob.shape)
+        # print("images_depth_prob", images_depth_prob)
         # Compute validation metrics.
         rgb_gt = batch["target"]["image"][0]
+        # print("rgb_gt shape", rgb_gt.shape)
         for tag, rgb in zip(
             ("val",), (rgb_softmax,)
         ):
@@ -739,19 +715,44 @@ class ModelWrapper(LightningModule):
             caption=batch["scene"],
         )
         # render depthmap validation
+        
         vis_depth_list = []
         for v_idx in range(images_depth_prob.shape[1]):
+            # print("images_depth_prob[0, v_idx] shape" ,images_depth_prob[0, v_idx].shape)
             vis_depth = viz_depth_tensor(
+                
                 1.0 / images_depth_prob[0, v_idx], return_numpy=True
             ) 
 
             vis_depth_list.append(torch.from_numpy(vis_depth/255.))
         vis_depth_tensor = torch.stack(vis_depth_list).permute(0, 3, 1, 2)
+        # print("vis_depth_tensor shape",vis_depth_tensor.shape)
+        # print("vis_depth_tensor",vis_depth_tensor)
+        depth_gt = batch["target"]["image_depth"].cpu().detach()
+        # print("depth_gt shape", depth_gt.shape)
+        # print("depth_gt", depth_gt)
+        vis_depth_gt_list = []
+        for v_idx_depth in range(depth_gt.shape[1]):
+            # print("depth_gt[0, v_idx] shape" ,depth_gt[0, v_idx_depth].shape)
+            # print("depth_gt[0, v_idx]", depth_gt[0, v_idx_depth])
+            # print("1.0 / (depth_gt[0, v_idx_depth])", 1.0 / depth_gt[0, v_idx_depth])
+            vis_depth_gt = viz_depth_tensor(
+                1.0 / depth_gt[0, v_idx_depth], return_numpy=True
+            ) 
+            # print(f"----------{v_idx_depth}----------------")
+            # print(vis_depth_gt/255.)
+            vis_depth_gt_list.append(torch.from_numpy(vis_depth_gt/255.))
 
+        vis_depth_gt_tensor = torch.stack(vis_depth_gt_list).permute(0, 3, 1, 2)
+        # print("vis_depth_gt_tensor shape",vis_depth_gt_tensor.shape)
+        # print("vis_depth_gt_tensor",vis_depth_gt_tensor)
+        
+        # depth_gt = batch["target"]["image_depth"][0]/1000.
+        # depth_gt = depth_gt.unsqueeze(1)
         depth = hcat(
             add_label(vcat(*batch["context"]["image"][0]), "Context"),
-            add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
-            add_label(vcat(*vis_depth_tensor), "Target depth"),
+            add_label(vcat(*vis_depth_gt_tensor), "Depth (Ground Truth)"),
+            add_label(vcat(*vis_depth_tensor), "Predict depth"),
         )
         self.logger.log_image(
             "depth",

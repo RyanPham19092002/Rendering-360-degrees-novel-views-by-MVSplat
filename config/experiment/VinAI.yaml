@@ -4,17 +4,18 @@ defaults:
   - override /dataset: VinAI
   - override /model/encoder: costvolume
   - override /loss: [mse, lpips]
+  # - override /loss: [mse, lpips,depth_supervisor]
 
 wandb:
   name: VinAI/view1
-  tags: [VinAI, 800x1280]
+  tags: [VinAI, 200x320]
 
 data_loader:
   train:
     batch_size: 5
 
 trainer:
-  max_steps: 1_501
+  max_steps: 200_001
 
 # ----- Additional params for default best model customization
 model:

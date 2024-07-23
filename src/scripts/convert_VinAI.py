@@ -22,7 +22,7 @@ INPUT_IMAGE_DIR = Path(args.input_dir)
 OUTPUT_DIR = Path(args.output_dir)
 JSON_FILE = Path(args.json_file)
 JSON_NAME = Path(args.json_name)
-
+os.makedirs(str(OUTPUT_DIR), exist_ok=True)
 # Target 100 MB per chunk.
 TARGET_BYTES_PER_CHUNK = int(1e8)
 
@@ -83,6 +83,7 @@ def load_images(example_path: Path) -> dict[int, UInt8[Tensor, "..."]]:
         cur_image_name = cur_path
         print(example_path / cur_image_name)
         img_bin = load_raw(example_path / cur_image_name)
+        print("RGB image shape", img_bin.shape)
         images_dict[cur_id] = img_bin
 
     return images_dict
@@ -156,7 +157,7 @@ def load_metadata(intrinsics, world2cams) -> Metadata:
 
 if __name__ == "__main__":
     # we only use DTU for testing, not for training
-    # for stage in ("test",):
+    # for stage in ("train",):
     for stage in ("train", "test"):
         intrinsics, world2cams, cam2worlds, near_fars = build_camera_info_from_json(JSON_FILE)
         # print("--------------Intrinsic----------------")
@@ -193,12 +194,26 @@ if __name__ == "__main__":
 
         for key in keys:
             print("key-------", key)
-            image_dir = INPUT_IMAGE_DIR / stage / key
+            # #image gt depth-------------------------------------------------
+            image_dir_depth = INPUT_IMAGE_DIR / stage / key / "input_images_raw"
+            print("image_dir_depth", image_dir_depth)
+            # num_bytes = get_size(image_dir) // 7
+            num_bytes_dir = get_size(image_dir_depth)
+
+            # Read images and metadata.
+            images_depth = load_images(image_dir_depth)
+            # print("images_depth", images_depth)
+            # print("images_depth shpae", images_depth.shape)
+
+            #image rgb----------------------------------------------------
+            image_dir = INPUT_IMAGE_DIR / stage / key / "input_images"
+            print("image_dir", image_dir)
             # num_bytes = get_size(image_dir) // 7
             num_bytes = get_size(image_dir)
 
             # Read images and metadata.
             images = load_images(image_dir)
+            print("num_bytes_dir, num_bytes", num_bytes_dir,num_bytes)
             print("---------------------images----------------")
             print(images)
             example_raw = load_metadata(intrinsics, world2cams)
@@ -213,11 +228,18 @@ if __name__ == "__main__":
                 # images[timestamp.item()] for timestamp in example["timestamps"]
                 images[str(timestamp.item())] for timestamp in example["timestamps"]
             ]
+            #merge depth
+            example["images_depth"] = [
+                # images[timestamp.item()] for timestamp in example["timestamps"]
+                images_depth[str(timestamp.item())] for timestamp in example["timestamps"]
+            ]
             assert len(images) == len(example["timestamps"])
 
             # Add the key to the example.
             example["key"] = key
-
+            print("example-----------------------", example)
+            num_bytes = max(num_bytes, num_bytes_dir)
+            # exit(0)
             print(f"Added {key} to chunk ({num_bytes / 1e6:.2f} MB).")
             chunk.append(example)
             chunk_size += num_bytes
@@ -225,6 +247,7 @@ if __name__ == "__main__":
             if chunk_size >= TARGET_BYTES_PER_CHUNK:
                 save_chunk()
         print("example-----------------------", example)
+        
         if chunk_size > 0:
             save_chunk()
 

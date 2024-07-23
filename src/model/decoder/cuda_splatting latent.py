@@ -132,7 +132,7 @@ def render_cuda(
         #     cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
         #     # cov3D_precomp=gaussian_covariances[i, :, row, col],
         # )
-        image, _, depth_map, _= rasterizer(
+        image, feature, _, depth_map, _= rasterizer(
             means3D=gaussian_means[i],
             means2D=mean_gradients,
             shs=shs[i] if use_sh else None,
@@ -251,7 +251,7 @@ def render_cuda_orthographic(
         #     cov3D_precomp=gaussian_covariances[i, :, row, col],  # sử dụng cov3Ds_precomp nếu có, ngược lại truyền tensor rỗng
         #     # cov3D_precomp=gaussian_covariances[i, :, row, col],
         # )
-        image, _, _, _ = rasterizer(
+        image, _, _, _, _ = rasterizer(
             means3D=gaussian_means[i],
             means2D=mean_gradients,
             shs=shs[i] if use_sh else None,

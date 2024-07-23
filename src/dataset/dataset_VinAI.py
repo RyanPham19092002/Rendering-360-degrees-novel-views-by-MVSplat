@@ -1,4 +1,5 @@
 import json
+import numpy as np
 from dataclasses import dataclass
 from functools import cached_property
 from io import BytesIO
@@ -46,8 +47,8 @@ class DatasetVinAI(IterableDataset):
 
     to_tensor: tf.ToTensor
     chunks: list[Path]
-    near: float = 0.5
-    far: float = 5000
+    near: float = 1.
+    far: float = 1000.
     # near: float = 0.1
     # far: float = 1000.0
 
@@ -72,13 +73,14 @@ class DatasetVinAI(IterableDataset):
         self.chunks = []
         for root in cfg.roots:
             root = root / self.data_stage
+            # root = root / "train"
             root_chunks = sorted(
                 [path for path in root.iterdir() if path.suffix == ".torch"]
             )
             self.chunks.extend(root_chunks)
         if self.cfg.overfit_to_scene is not None:
-            print("over to scec", self.cfg.overfit_to_scene)
-            print("index",self.index)
+            # print("over to scec", self.cfg.overfit_to_scene)
+            # print("index",self.index)
             chunk_path = self.index[self.cfg.overfit_to_scene]
             self.chunks = [chunk_path] * len(self.chunks)
         if self.stage == "test":
@@ -106,7 +108,7 @@ class DatasetVinAI(IterableDataset):
             ]
 
         for chunk_path in self.chunks:
-            print("-----------------chunk_path------------", chunk_path)
+            # print("-----------------chunk_path------------", chunk_path)
             # Load the chunk.
             chunk = torch.load(chunk_path)
 
@@ -114,16 +116,16 @@ class DatasetVinAI(IterableDataset):
                 item = [x for x in chunk if x["key"] == self.cfg.overfit_to_scene]
                 assert len(item) == 1
                 chunk = item * len(chunk)
-            print("self.cfg.shuffle_val--------------------", self.cfg.shuffle_val)
+            # print("self.cfg.shuffle_val--------------------", self.cfg.shuffle_val)
             if self.stage in (("train", "val") if self.cfg.shuffle_val else ("train")):
                 chunk = self.shuffle(chunk)
 
             # for example in chunk:
             times_per_scene = self.cfg.test_times_per_scene
-            print("times_per_scene-------------", times_per_scene)
-            print("len(chunk)---------------------", len(chunk))
+            # print("times_per_scene-------------", times_per_scene)
+            # print("len(chunk)---------------------", len(chunk))
             for run_idx in range(int(times_per_scene * len(chunk))):
-                print("run_idx---------------------", run_idx)
+                # print("run_idx---------------------", run_idx)
                 example = chunk[run_idx // times_per_scene]
                 
 
@@ -152,8 +154,6 @@ class DatasetVinAI(IterableDataset):
                         extrinsics,
                         intrinsics,
                     )
-                    # print("context_indices-----------------", context_indices)
-                    # print("target_indices-----------------", target_indices)
                     # reverse the context
                     # context_indices = torch.flip(context_indices, dims=[0])
 
@@ -174,6 +174,16 @@ class DatasetVinAI(IterableDataset):
                     example["images"][index.item()] for index in target_indices
                 ]
                 target_images = self.convert_images(target_images)
+                #------------------depth--img-------------------------------------
+                # Load the depth images.
+                context_depth_images = [
+                    example["images_depth"][index.item()] for index in context_indices
+                ]
+                context_depth_images = self.convert_depth_images(context_depth_images)
+                target_depth_images = [
+                    example["images_depth"][index.item()] for index in target_indices
+                ]
+                target_depth_images = self.convert_depth_images(target_depth_images)
                 # print("context_indices-----------------", context_indices)
                 # print("target_indices-----------------", target_indices)
                 # Skip the example if the images don't have the right shape.
@@ -211,6 +221,7 @@ class DatasetVinAI(IterableDataset):
                         "near": self.get_bound("near", len(context_indices)) / nf_scale,
                         "far": self.get_bound("far", len(context_indices)) / nf_scale,
                         "index": context_indices,
+                        "image_depth": context_depth_images,
                     },
                     "target": {
                         "extrinsics": extrinsics[target_indices],
@@ -219,6 +230,7 @@ class DatasetVinAI(IterableDataset):
                         "near": self.get_bound("near", len(target_indices)) / nf_scale,
                         "far": self.get_bound("far", len(target_indices)) / nf_scale,
                         "index": target_indices,
+                        "image_depth": target_depth_images,
                     },
                     "scene": scene,
                 }
@@ -261,6 +273,34 @@ class DatasetVinAI(IterableDataset):
             torch_images.append(self.to_tensor(image))
         return torch.stack(torch_images)
 
+    def convert_depth_images(
+        self,
+        images: list[UInt8[Tensor, "..."]],
+    ) -> Float[Tensor, "batch height width"]:
+        depth_maps = []
+        for image in images:
+            # Convert tensor to image
+            image = Image.open(BytesIO(image.numpy().tobytes()))
+            img_array = np.array(image)
+
+            # Extract RGB channels
+            R = img_array[:, :, 0].astype(np.float32)
+            G = img_array[:, :, 1].astype(np.float32)
+            B = img_array[:, :, 2].astype(np.float32)
+
+            # Calculate normalized depth and depth
+            normalized_depth = (R + G * 256 + B * 256 * 256) / (256 * 256 * 256 - 1)
+            depth_map = normalized_depth * 1000
+
+            # Convert depth map to tensor and append to the list
+            depth_map_tensor = torch.tensor(depth_map, dtype=torch.float32)
+            depth_maps.append(depth_map_tensor)
+            # print("depth_map_tensor shape", depth_map_tensor.shape)
+            # print("depth_map_tensors", depth_map_tensor)
+
+        # Stack depth maps to create a batch tensor
+        return torch.stack(depth_maps)
+
     def get_bound(
         self,
         bound: Literal["near", "far"],
@@ -283,23 +323,27 @@ class DatasetVinAI(IterableDataset):
         data_stages = [self.data_stage]
         if self.cfg.overfit_to_scene is not None:
             data_stages = ("test", "train")
+            # data_stages = ("train",)
         for data_stage in data_stages:
         # data_stage = "test"
+            # print("data_stage", data_stage)
             for root in self.cfg.roots:
                 # Load the root's index.
+                # data_stage = "train"
                 # print(root / data_stage / "index_VinAI_6_input_full_views_nf_5000.json")
                 with (root / data_stage / "index_VinAI_more_views_nf_5000_train.json").open("r") as f:
                     index = json.load(f)
                 index = {k: Path(root / data_stage / v) for k, v in index.items()}
-                print("index", index)
+                # print("index", index)
                 # The constituent datasets should have unique keys.
-                print("merged_index keys:", merged_index.keys())
-                print("index keys:", index.keys())
-                print("Common keys:", set(merged_index.keys()) & set(index.keys()))
+                # print("merged_index keys:", merged_index.keys())
+                # print("index keys:", index.keys())
+                # print("Common keys:", set(merged_index.keys()) & set(index.keys()))
                 assert not (set(merged_index.keys()) & set(index.keys()))
 
                 # Merge the root's index into the main index.
                 merged_index = {**merged_index, **index}
+                # print("merged_index", merged_index)
         return merged_index
 
     def __len__(self) -> int:

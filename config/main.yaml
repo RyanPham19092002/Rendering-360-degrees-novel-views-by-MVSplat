@@ -1,9 +1,9 @@
 defaults:
-  - dataset: re10k
+  - dataset: VinAI
   - optional dataset/view_sampler_dataset_specific_config: ${dataset/view_sampler}_${dataset}
   - model/encoder: costvolume
   - model/decoder: splatting_cuda
-  - loss: [mse]
+  - loss: [mse, lpips, depth_supervisor]
 
 wandb:
   project: mvsplat
@@ -47,7 +47,7 @@ checkpointing:
   pretrained_model: null
 
 train:
-  depth_mode: null
+  depth_mode: depth
   extended_visualization: false
   print_log_every_n_steps: 1
 

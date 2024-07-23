@@ -1,1 +1,1 @@
-python /home/ubuntu/Workspace/phat-intern-dev/VinAI/mvsplat/src/scripts/generate_VinAI_evaluation_index.py  --n_contexts 2 --dataset_name VinAI
+python /data/Phat/mvsplat/src/scripts/generate_VinAI_evaluation_index.py  --n_contexts 2 --dataset_name VinAI

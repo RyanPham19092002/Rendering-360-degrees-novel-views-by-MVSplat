@@ -92,7 +92,7 @@ def main(args):
             #         target=targets,
             #     )
     # save index to files
-    out_path = f"assets/evaluation_index_{args.dataset_name}_subdata_5_imgs_per_view_nctx{args.n_contexts}_nf_5000.json"
+    out_path = f"assets/evaluation_index_{args.dataset_name}_subdata_5_imgs_per_view_nctx{args.n_contexts}_nf_5000_route1_route2_200x320.json"
     with open(out_path, "w") as f:
         json.dump({k: None if v is None else asdict(v)
                   for k, v in index.items()}, f)

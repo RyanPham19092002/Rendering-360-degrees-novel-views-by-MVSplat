@@ -21,6 +21,7 @@ def vis_disparity(disp):
 
 def viz_depth_tensor(disp, return_numpy=False, colormap='plasma'):
     # visualize inverse depth
+    # disp = disp.cpu().detach()
     assert isinstance(disp, torch.Tensor)
 
     disp = disp.numpy()

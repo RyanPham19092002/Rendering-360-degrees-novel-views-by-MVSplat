@@ -2,7 +2,7 @@ import os
 from PIL import Image
 
 
-folder_path = "/home/ubuntu/Workspace/phat-intern-dev/VinAI/subdata_VInAI/ClearNoon/vehicle.tesla.invisible/spawn_point_10/step_44"
+folder_path = "/data/Phat/VinAI/subdata_mvsgaussian_depth_route1_route2_p2/train"
 
 for filename in os.listdir(folder_path):
     if filename.endswith('.png') or filename.endswith('.jpeg'):
