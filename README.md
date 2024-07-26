@@ -12,7 +12,7 @@ To create file to testing, running file <b>generate_VinAI_evaluation_index.sh</b
 <br>
 To render view, running file <b>run.sh</b>
 <br>
-Rendering novel view 2 mode : non-target view and has target view
+Rendering novel view 2 mode : <b>non-target view</b> and has <b>target view</b>
 <ul>
   <li>Non-target view : generate 21 images (Each image is 3 degrees away, which can be varied by changing the number of poses created by pose interpolation in file src/model/model_wrapper.py at line 302)</li>
   <li>Target-view : generate 3 images (each image is the target view)</li>
