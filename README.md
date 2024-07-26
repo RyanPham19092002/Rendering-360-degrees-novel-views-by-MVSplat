@@ -6,21 +6,19 @@ Link github : "https://github.com/donydchen/mvsplat"
 create folder VinAI, then download data in the google drive link below to this folder
 Dataset in folder VinAI : "https://drive.google.com/drive/folders/143VCby_smLN1ciqzZjG8d8CYPY9V0XS0?usp=drive_link"
 <br>
-To convert Data, running file convert.sh
+To convert Data, running file <b>convert.sh</b>
 <br>
-To create file to testing, running file generate_VinAI_evaluation_index.sh
+To create file to testing, running file <b>generate_VinAI_evaluation_index.sh</b>
 <br>
-To render view, running file run.sh
+To render view, running file <b>run.sh</b>
 <br>
 Rendering novel view 2 mode : non-target view and has target view
 <ul>
-  Non-target view : generate 21 images (Each image is 3 degrees away, which can be varied by changing the number of poses created by pose interpolation in file src/model/model_wrapper.py at line 302)
-</ul>
-<ul>
-  Target-view : generate 3 images (each image is the target view)
+  <li>Non-target view : generate 21 images (Each image is 3 degrees away, which can be varied by changing the number of poses created by pose interpolation in file src/model/model_wrapper.py at line 302)</li>
+  <li>Target-view : generate 3 images (each image is the target view)</li>
 </ul>
 <br>
-To create a video after render novel view non-target,running create_video.py
+To create a video after render novel view non-target,running <b>create_video.py</b>
 
 
 # MVSplat
