@@ -3,6 +3,8 @@
 This is the project rendering  360 degrees novel views around the main object based on the topic <p1><b>"MVSplat: Efficient 3D Gaussian Splatting from Sparse Multi-View Images"</b></p1>
 </br>
 Link github : "https://github.com/donydchen/mvsplat"
+create folder VinAI, then download data in the google drive link below to this folder
+Dataset in folder VinAI : "https://drive.google.com/drive/folders/143VCby_smLN1ciqzZjG8d8CYPY9V0XS0?usp=drive_link"
 
 # MVSplat
 
