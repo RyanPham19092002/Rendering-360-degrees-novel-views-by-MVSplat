@@ -5,13 +5,21 @@ This is the project rendering  360 degrees novel views around the main object ba
 Link github : "https://github.com/donydchen/mvsplat"
 create folder VinAI, then download data in the google drive link below to this folder
 Dataset in folder VinAI : "https://drive.google.com/drive/folders/143VCby_smLN1ciqzZjG8d8CYPY9V0XS0?usp=drive_link"
-
+<br>
 To convert Data, running file convert.sh
+<br>
 To create file to testing, running file generate_VinAI_evaluation_index.sh
+<br>
 To render view, running file run.sh
+<br>
 Rendering novel view 2 mode : non-target view and has target view
-Non-target view : generate 21 images (Each image is 3 degrees away, which can be varied by changing the number of poses created by pose interpolation in file src/model/model_wrapper.py at line 302)
-Target-view : generate 3 images (each image is the target view)
+<ul>
+  Non-target view : generate 21 images (Each image is 3 degrees away, which can be varied by changing the number of poses created by pose interpolation in file src/model/model_wrapper.py at line 302)
+</ul>
+<ul>
+  Target-view : generate 3 images (each image is the target view)
+</ul>
+<br>
 To create a video after render novel view non-target,running create_video.py
 
 
